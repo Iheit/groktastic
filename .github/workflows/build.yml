@@ -1,25 +1,49 @@
-name: build
+name: Build Groktastic
+
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            preset: windows
+          - os: ubuntu-24.04
+            preset: linux
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Install graphics dependencies
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux graphics dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxinerama-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
       - name: Build
-        run: cmake --build build --parallel 2
-      - name: Package Linux build
-        run: |
-          mkdir -p dist
-          cp build/groktastic dist/groktastic
-          if [ -d assets ]; then cp -r assets dist/assets; fi
-      - name: Upload Linux build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --target package_windows
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: cmake --build build --config Release --target package_linux
+
+      - name: Upload packaged build
         uses: actions/upload-artifact@v4
         with:
-          name: groktastic-linux-x64
-          path: dist/
+          name: groktastic-${{ matrix.preset }}-x64
+          path: build/package/
