@@ -8,7 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
-# Keep raylib's own optional targets disabled so the Windows build only
+# Keep raylib's optional targets disabled so the Windows build only
 # produces the game we need.
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
@@ -22,7 +22,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(raylib)
 
-add_executable(groktastic WIN32 src/main.cpp)
+add_executable(groktastic src/main.cpp)
 target_link_libraries(groktastic PRIVATE raylib)
 
 target_compile_definitions(groktastic PRIVATE
@@ -43,15 +43,21 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
             "${CMAKE_SOURCE_DIR}/assets"
             "$<TARGET_FILE_DIR:groktastic>/assets"
   )
-endif()
 
-# Make a portable Windows package directly from the Release build tree.
-set(PACKAGE_DIR "${CMAKE_BINARY_DIR}/package")
-add_custom_target(package_windows
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACKAGE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${PACKAGE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:groktastic>" "${PACKAGE_DIR}/groktastic.exe"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "${PACKAGE_DIR}/assets"
-  DEPENDS groktastic
-  COMMENT "Packaging Groktastic for Windows"
-)
+  add_custom_target(package_windows
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:groktastic>" "${CMAKE_BINARY_DIR}/package/groktastic.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "${CMAKE_BINARY_DIR}/package/assets"
+    DEPENDS groktastic
+    COMMENT "Packaging Groktastic for Windows"
+  )
+else()
+  add_custom_target(package_windows
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:groktastic>" "${CMAKE_BINARY_DIR}/package/groktastic.exe"
+    DEPENDS groktastic
+    COMMENT "Packaging Groktastic for Windows"
+  )
+endif()
