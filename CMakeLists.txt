@@ -22,7 +22,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(raylib)
 
-add_executable(groktastic src/main.cpp)
+add_executable(groktastic src/entry.cpp)
 target_link_libraries(groktastic PRIVATE raylib)
 
 target_compile_definitions(groktastic PRIVATE
