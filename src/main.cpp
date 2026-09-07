@@ -3,390 +3,48 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <ctime>
-#include <deque>
 #include <string>
 #include <vector>
 
 namespace {
-constexpr int W = 1600;
-constexpr int H = 900;
-constexpr float WORLD = 360.0f;
-constexpr float ROAD = 18.0f;
-constexpr float BLOCK = 54.0f;
-constexpr float PI2 = 6.28318530718f;
-
-float clampf(float v, float a, float b) { return std::max(a, std::min(v, b)); }
-float frand(float a, float b) { return a + (b - a) * (static_cast<float>(std::rand()) / RAND_MAX); }
-Vector3 v3(float x, float y, float z) { return {x, y, z}; }
-Color alpha(Color c, unsigned char a) { c.a = a; return c; }
-
-struct Vehicle {
-    Vector3 p{};
-    float yaw = 0;
-    float speed = 0;
-    float health = 100;
-    bool occupied = false;
-    bool police = false;
-    Color body{200, 60, 55, 255};
-};
-
-struct Ped {
-    Vector3 p{};
-    Vector3 target{};
-    float phase = 0;
-    float hp = 40;
-    bool alive = true;
-    bool hostile = false;
-};
-
-struct Mission {
-    std::string name;
-    std::string objective;
-    Vector3 target{};
-    float radius = 6;
-    bool active = false;
-    bool complete = false;
-    float timer = 0;
-};
-
-struct Pickup { Vector3 p{}; bool alive = true; int value = 100; };
-
-struct Game {
-    Vector3 player{0, 1, 20};
-    float playerYaw = 0;
-    float playerPitch = 0.28f;
-    float health = 100;
-    float armor = 25;
-    int cash = 500;
-    int wanted = 0;
-    int missionIndex = 0;
-    bool inCar = false;
-    bool paused = false;
-    bool aiming = false;
-    float shootCooldown = 0;
-    float muzzle = 0;
-    float missionBanner = 5;
-    float damageFlash = 0;
-    float time = 0;
-    float day = 0.35f;
-    std::vector<Vehicle> cars;
-    std::vector<Ped> peds;
-    std::vector<Pickup> pickups;
-    std::vector<Mission> missions;
-    Vehicle* car = nullptr;
-};
-
-void AddMission(Game& g, const char* name, const char* objective, Vector3 target, float radius) {
-    g.missions.push_back({name, objective, target, radius, false, false, 0});
+constexpr int SW=1600, SH=900; constexpr float CITY=360.0f, PI2=6.28318530718f;
+float clampf(float x,float a,float b){return std::max(a,std::min(x,b));}
+float rnd(float a,float b){return a+(b-a)*(float(std::rand())/float(RAND_MAX));}
+Vector3 V(float x,float y,float z){return{x,y,z};}
+Color A(Color c,unsigned char a){c.a=a;return c;}
+struct Car{Vector3 p{};float yaw=0,speed=0,hp=100;bool player=false,police=false;Color body{220,70,70,255};};
+struct Ped{Vector3 p{},goal{};float hp=40;bool alive=true,hostile=false;};
+struct Mission{std::string name,text;Vector3 target{};float radius=7,timer=0;bool active=false,done=false;};
+struct Game{Vector3 p{0,1,20};float yaw=0,pitch=.25f,time=0;float hp=100,armor=30;int cash=500,wanted=0,mi=0;bool car=false,paused=false,aim=false;float shot=0,flash=0,banner=4;Car* vehicle=nullptr;std::vector<Car> cars;std::vector<Ped> peds;std::vector<Vector3> loot;std::vector<Mission> missions;};
+float Ground(float x,float z){return .12f*sinf(x*.025f)*cosf(z*.018f);}
+Vector3 Forward(float y,float p=0){return Vector3Normalize(V(sinf(y)*cosf(p),-sinf(p),cosf(y)*cosf(p)));}
+void MissionAdd(Game&g,const char*n,const char*t,Vector3 p,float r){g.missions.push_back({n,t,p,r});}
+void BuildGame(Game&g){std::srand(1337);g.cars.clear();g.peds.clear();g.loot.clear();g.missions.clear();
+ const Color cols[]={{40,125,225,255},{220,55,60,255},{240,175,55,255},{55,185,110,255},{165,75,195,255},{225,225,230,255}};
+ for(int i=0;i<48;i++){Car c;bool h=i%2==0;float lane=(i/2%9-4)*36.0f+(h?7:-7);float q=rnd(-170,170);c.p=h?V(q,1,lane):V(lane,1,q);c.yaw=h?(i%4<2?0:PI2*.5f):(i%4<2?PI2*.5f:0);c.speed=rnd(6,13);c.body=cols[i%6];c.police=i<6;if(c.police)c.body={235,235,240,255};g.cars.push_back(c);}
+ for(int i=0;i<110;i++){Ped p;p.p=V(rnd(-165,165),0,rnd(-165,165));p.goal=V(clampf(p.p.x+rnd(-35,35),-175,175),0,clampf(p.p.z+rnd(-35,35),-175,175));p.hostile=i%19==0;g.peds.push_back(p);}
+ for(int i=0;i<34;i++)g.loot.push_back(V(rnd(-155,155),1,rnd(-155,155)));
+ MissionAdd(g,"HOT PACKAGE","Grab the package at the old tower.",V(-108,1,-102),8);MissionAdd(g,"CLEAN GETAWAY","Take the score to the safehouse.",V(132,1,96),10);MissionAdd(g,"HEAT CHECK","Hold out while the city comes for you: 45 seconds.",V(0,1,0),999);
 }
-
-void GenerateWorld(Game& g) {
-    std::srand(1337);
-    g.cars.clear(); g.peds.clear(); g.pickups.clear();
-    const Color carColors[] = {{34,120,220,255},{220,55,55,255},{238,174,48,255},{55,185,110,255},{160,70,190,255},{225,225,225,255}};
-    for (int i = 0; i < 42; ++i) {
-        bool horizontal = (i % 2) == 0;
-        float lane = (static_cast<int>(i / 2) % 9 - 4) * 36.0f + (horizontal ? 7.0f : -7.0f);
-        float along = frand(-160, 160);
-        Vehicle c;
-        c.p = horizontal ? v3(along, 1.1f, lane) : v3(lane, 1.1f, along);
-        c.yaw = horizontal ? ((i % 4 < 2) ? 0 : PI2 * 0.5f) : ((i % 4 < 2) ? PI2 * 0.5f : 0);
-        c.speed = frand(6, 13);
-        c.body = carColors[i % 6];
-        c.police = i < 5;
-        if (c.police) c.body = {235,235,245,255};
-        g.cars.push_back(c);
-    }
-    for (int i = 0; i < 95; ++i) {
-        Ped p;
-        p.p = v3(frand(-165,165), 0, frand(-165,165));
-        p.target = v3(clampf(p.p.x + frand(-35,35), -175,175), 0, clampf(p.p.z + frand(-35,35), -175,175));
-        p.phase = frand(0, PI2);
-        p.hostile = (i % 17 == 0);
-        g.peds.push_back(p);
-    }
-    for (int i = 0; i < 28; ++i) g.pickups.push_back({v3(frand(-150,150), 1.0f, frand(-150,150)), true, 50 + (i%5)*50});
-    AddMission(g, "HOT PACKAGE", "Take the package before the rival crew reaches it.", v3(-104,1,-102), 7);
-    AddMission(g, "CLEAN GETAWAY", "Deliver the package to the safehouse.", v3(132,1,96), 9);
-    AddMission(g, "HEAT CHECK", "Survive the police response for 45 seconds.", v3(0,1,0), 999);
+void Roads(){for(int i=-3;i<=3;i++){float q=i*54;DrawCube(V(0,0,q),CITY,.08f,18,{37,41,47,255});DrawCube(V(q,0,0),18,.08f,CITY,{37,41,47,255});for(float s=-170;s<170;s+=18){DrawCube(V(s,.07f,q),7,.03f,.22f,{190,170,85,200});DrawCube(V(q,.07f,s),.22f,.03f,7,{190,170,85,200});}}}
+void Building(float x,float z,float w,float d,float h,int seed){Color c{(unsigned char)clampf(52+seed%32,25,90),(unsigned char)clampf(58+(seed*3)%35,30,100),(unsigned char)clampf(72+(seed*5)%45,35,120),255};DrawCube(V(x,h*.5f,z),w,h,d,c);DrawCubeWires(V(x,h*.5f,z),w,h,d,A({10,15,23,255},120));for(int r=0;r<int(h/5);r++)for(int col=0;col<int(w/4);col++){if((col*7+r*11+seed)%5==0)continue;float xx=x-w*.5f+2+col*4;DrawCube(V(xx,2.4f+r*5,z-d*.501f),1.35f,1.3f,.08f,A({105,190,220,255},(unsigned char)(145+(seed+r+col)%90)));}DrawCube(V(x,h+.45f,z),w*.82f,.7f,d*.82f,{25,29,38,255});}
+void World(Game&g){DrawPlane(V(0,0,0),{CITY,CITY},{22,29,37,255});Roads();for(int x=-4;x<=4;x++)for(int z=-4;z<=4;z++){if(abs(x)<=3&&abs(z)<=3&&(x==0||z==0))continue;float px=x*54,pz=z*54;if((x+z)%5==0){DrawCube(V(px,.1f,pz),49,.2f,49,{39,73,51,255});for(int k=0;k<5;k++)DrawCube(V(px+rnd(-18,18),1,pz+rnd(-18,18)),1,2,1,{34,96,52,255});}else Building(px+rnd(-5,5),pz+rnd(-5,5),rnd(25,45),rnd(25,45),rnd(9,34),x*31+z*17);}
+ DrawCylinder(V(-108,19,-102),11,7,38,16,{52,61,75,255});DrawCylinder(V(-108,40,-102),.8,.35,22,8,{170,180,192,255});DrawSphere(V(-108,52,-102),1.4f,{245,72,72,255});
+ for(int x=-3;x<=3;x++)for(int z=-3;z<=3;z++){float px=x*54+11,pz=z*54+11;DrawCylinder(V(px,2.8f,pz),.14,.14,5.5f,8,{50,54,61,255});DrawSphere(V(px,5.7f,pz),.38f,{255,210,130,255});}
+ for(int i=0;i<14;i++){float h=rnd(18,52),x=-175+i*27;DrawCube(V(x,h*.5f,-178),20,h,10,{28,36,50,255});DrawCube(V(x,h*.72f,-183),14,1,.12f,{90,150,190,100});}}
+void CarDraw(const Car&c,float t){Vector3 p=c.p;DrawCube(p+V(0,.65f,0),3.9f,1,7.2f,c.body);DrawCube(p+V(0,1.25f,.25f),3, .85f,3.6f,{37,47,59,255});DrawCube(p+V(0,1.3f,-1.55f),2.65f,.55f,1.15f,{100,150,170,255});DrawCube(p+V(0,1.3f,2.05f),2.65f,.55f,1.15f,{50,70,83,255});for(int s=-1;s<=1;s+=2)for(int z=-1;z<=1;z+=2)DrawCylinder(p+V(s*2,.48f,z*2.3f),.62,.62,.35,12,{17,19,23,255});DrawCube(p+V(-1.75f,1,-3.45f),.7,.3,.1,{255,220,150,255});DrawCube(p+V(1.75f,1,-3.45f),.7,.3,.1,{255,220,150,255});if(c.police){float b=.5f+.5f*sinf(t*12);DrawCube(p+V(0,1.8f,0),1.2,.28,.55,{220,220,225,255});DrawCube(p+V(-.38f,1.98f,0),.28,.12,.55,A({235,50,65,255},(unsigned char)(80+175*b)));DrawCube(p+V(.38f,1.98f,0),.28,.12,.55,A({55,105,245,255},(unsigned char)(80+175*(1-b))));}}
+void PedDraw(const Ped&p){if(!p.alive)return;DrawCylinder(p.p+V(0,1,0),.36,.48,1.4,8,p.hostile?Color{205,65,62,255}:Color{65,105,150,255});DrawSphere(p.p+V(0,1.95f,0),.33,{190,145,112,255});}
+void Traffic(Game&g,float dt){for(auto&c:g.cars)if(!c.player){Vector3 d=V(sinf(c.yaw),0,cosf(c.yaw));c.p+=d*c.speed*dt;if(c.p.x>180)c.p.x=-180;if(c.p.x<-180)c.p.x=180;if(c.p.z>180)c.p.z=-180;if(c.p.z<-180)c.p.z=180;c.speed=clampf(c.speed+rnd(-1,1)*dt,5,14);}}
+void Peds(Game&g,float dt){for(auto&p:g.peds)if(p.alive){Vector3 d=p.goal-p.p;d.y=0;if(Vector3Length(d)<2){p.goal=V(rnd(-165,165),0,rnd(-165,165));d=p.goal-p.p;}if(Vector3Length(d)>.01f)p.p+=Vector3Normalize(d)*(p.hostile?1.8f:1.25f)*dt;p.p.y=Ground(p.p.x,p.p.z);}}
+void EnterCar(Game&g){if(g.car){g.p=g.vehicle->p+V(4,0,0);g.vehicle->player=false;g.vehicle=nullptr;g.car=false;return;}float best=5;Car*near=nullptr;for(auto&c:g.cars){float d=Vector3Distance(g.p,c.p);if(d<best){best=d;near=&c;}}if(near){g.car=true;g.vehicle=near;near->player=true;g.p=near->p;}}
+void Shoot(Game&g,Camera3D&cam){if(g.shot>0)return;g.shot=.14f;g.flash=.08f;Ray r=GetMouseRay(GetMousePosition(),cam);float best=1e9;Ped*hit=nullptr;for(auto&p:g.peds)if(p.alive){auto h=GetRayCollisionSphere(r,p.p+V(0,1,0),.55f);if(h.hit&&h.distance<best){best=h.distance;hit=&p;}}if(hit){hit->hp-=35;if(hit->hp<=0){hit->alive=false;g.cash+=25;}g.wanted=std::min(5,g.wanted+1);}}
+void Camera(Game&g,Camera3D&c){Vector3 t=g.car&&g.vehicle?g.vehicle->p+V(0,1.2f,0):g.p+V(0,1.5f,0);Vector3 f=Forward(g.yaw,g.pitch*.55f);c.target=t;c.position=t-f*(g.car?12:8.2f)+V(0,2.2f,0);c.up={0,1,0};c.fovy=63;c.projection=CAMERA_PERSPECTIVE;}
+void Update(Game&g,float dt,Camera3D&cam){g.time+=dt;g.shot=std::max(0.f,g.shot-dt);g.flash=std::max(0.f,g.flash-dt);g.banner=std::max(0.f,g.banner-dt);if(IsKeyPressed(KEY_ESCAPE)){g.paused=!g.paused;if(g.paused)EnableCursor();else DisableCursor();}if(g.paused)return;Vector2 m=GetMouseDelta();g.yaw+=m.x*.0028f;g.pitch=clampf(g.pitch-m.y*.0022f,-.7f,.9f);g.aim=IsMouseButtonDown(MOUSE_BUTTON_RIGHT);if(IsKeyPressed(KEY_E))EnterCar(g);if(IsMouseButtonDown(MOUSE_BUTTON_LEFT))Shoot(g,cam);Traffic(g,dt);Peds(g,dt);
+ if(g.car&&g.vehicle){Car&c=*g.vehicle;float th=(IsKeyDown(KEY_W)?1.f:0.f)-(IsKeyDown(KEY_S)?1.f:0.f);float st=(IsKeyDown(KEY_D)?1.f:0.f)-(IsKeyDown(KEY_A)?1.f:0.f);c.speed=clampf(c.speed+th*26*dt,-10,IsKeyDown(KEY_LEFT_SHIFT)?31:23);if(abs(th)<.1f)c.speed*=pow(.04f,dt);c.yaw+=st*dt*(1.9f+abs(c.speed)*.04f)*(c.speed>=0?1:-1);c.p+=V(sinf(c.yaw),0,cosf(c.yaw))*c.speed*dt;c.p.x=clampf(c.p.x,-176,176);c.p.z=clampf(c.p.z,-176,176);c.p.y=Ground(c.p.x,c.p.z)+1;g.p=c.p;if(IsKeyPressed(KEY_SPACE))c.speed*=.88f;}else{Vector3 f=Forward(g.yaw),r=V(f.z,0,-f.x),m{};if(IsKeyDown(KEY_W))m+=f;if(IsKeyDown(KEY_S))m-=f;if(IsKeyDown(KEY_D))m+=r;if(IsKeyDown(KEY_A))m-=r;if(Vector3Length(m)>.01f)g.p+=Vector3Normalize(m)*(IsKeyDown(KEY_LEFT_SHIFT)?11:6.3f)*dt;if(IsKeyPressed(KEY_SPACE)&&g.p.y<=1.05f)g.p.y=4.2f;g.p.y=std::max(1.f,g.p.y-15*dt);g.p.x=clampf(g.p.x,-176,176);g.p.z=clampf(g.p.z,-176,176);}
+ for(auto&l:g.loot)if(Vector3Distance(g.p,l)<2.2f){l=V(999,999,999);g.cash+=100;}for(auto&p:g.peds)if(p.alive&&p.hostile&&Vector3Distance(g.p,p.p)<4&&g.wanted){if(rnd(0,1)<dt*.5f){if(g.armor>0)g.armor-=8;else g.hp-=8;}}
+ if(g.hp<=0){g.hp=100;g.armor=30;g.cash=std::max(0,g.cash-250);g.wanted=0;g.p=V(0,1,20);g.car=false;g.vehicle=nullptr;}
+ if(g.mi<(int)g.missions.size()){auto&m=g.missions[g.mi];if(!m.active&&!m.done){m.active=true;g.banner=5;if(g.mi==2)g.wanted=3;}if(m.active){m.timer+=dt;if(g.mi==2&&m.timer>=45){m.done=true;m.active=false;g.cash+=1500;g.mi++;g.banner=6;g.wanted=0;}else if(g.mi<2&&Vector3Distance(g.p,m.target)<m.radius){m.done=true;m.active=false;g.cash+=1000;g.wanted=std::max(0,g.wanted-1);g.mi++;g.banner=6;}}}}
+void UI(const Game&g){DrawRectangle(0,0,SW,64,A({7,10,16,255},215));DrawText("GROKTASTIC",28,18,26,{235,239,245,255});DrawText("CITY // AFTER DARK",225,22,16,{110,170,190,255});DrawText(TextFormat("$ %06d",g.cash),SW-235,18,24,{115,230,160,255});for(int i=0;i<5;i++)DrawText(i<g.wanted?"*":"-",SW-240+i*25,46,19,i<g.wanted?Color{245,205,70,255}:Color{95,100,110,255});DrawRectangle(28,SH-66,260,12,{35,39,45,255});DrawRectangle(28,SH-66,260*(g.hp/100),12,{220,66,68,255});DrawRectangle(28,SH-46,260,9,{35,39,45,255});DrawRectangle(28,SH-46,260*clampf(g.armor/100,0,1),9,{80,150,215,255});DrawText("HEALTH",295,SH-70,14,{170,178,188,255});DrawText("ARMOR",295,SH-50,14,{170,178,188,255});DrawText(g.car?"E EXIT VEHICLE | SPACE HANDBRAKE":"WASD MOVE | SHIFT SPRINT | E ENTER CAR | LMB FIRE",SW/2-240,SH-52,14,{210,214,220,255});
+ int mx=SW-205,my=SH-205;DrawRectangle(mx,my,180,180,{12,17,23,220});for(int i=-3;i<=3;i++){DrawRectangle(mx+90+i*27,my,4,180,{40,45,51,255});DrawRectangle(mx,my+90+i*27,180,4,{40,45,51,255});}DrawCircle(mx+90+(int)(g.p.x/2),my+90+(int)(g.p.z/2),5,{90,220,150,255});if(g.mi<(int)g.missions.size()){auto&m=g.missions[g.mi];DrawCircle(mx+90+(int)(m.target.x/2),my+90+(int)(m.target.z/2),6,{245,175,70,255});DrawRectangle(SW/2-270,78,540,72,A({10,14,21,255},g.banner>0?235:135));DrawText(m.name.c_str(),SW/2-245,90,21,{245,190,80,255});DrawText(m.text.c_str(),SW/2-245,118,15,{215,220,225,255});}if(g.aim){DrawLine(SW/2-9,SH/2,SW/2+9,SH/2,{235,240,245,230});DrawLine(SW/2,SH/2-9,SW/2,SH/2+9,{235,240,245,230});}if(g.paused){DrawRectangle(0,0,SW,SH,A({3,5,8,255},185));DrawText("PAUSED",SW/2-72,SH/2-30,42,{240,242,245,255});DrawText("ESC TO RETURN",SW/2-76,SH/2+20,15,{160,170,180,255});}}
 }
-
-float GroundHeight(float x, float z) {
-    return 0.12f * std::sin(x * 0.025f) * std::cos(z * 0.018f);
-}
-
-void DrawRoads() {
-    for (int i = -3; i <= 3; ++i) {
-        float p = i * 54.0f;
-        DrawCube(v3(0,0,p), WORLD, 0.08f, ROAD, {38,42,48,255});
-        DrawCube(v3(p,0,0), ROAD, 0.08f, WORLD, {38,42,48,255});
-        for (float q=-170; q<170; q+=18) {
-            DrawCube(v3(q,0.07f,p), 7,0.03f,0.22f, {190,172,92,190});
-            DrawCube(v3(p,0.07f,q), 0.22f,0.03f,7, {190,172,92,190});
-        }
-    }
-}
-
-void DrawBuilding(float x, float z, float w, float d, float h, Color c, int seed) {
-    float y = h * 0.5f;
-    DrawCube(v3(x,y,z), w,h,d,c);
-    DrawCubeWires(v3(x,y,z),w,h,d,alpha({20,24,31,255},120));
-    for (int row=0; row<std::max(1,static_cast<int>(h/5)); ++row) {
-        float yy = 2.4f + row*5.0f;
-        if (yy > h-1.0f) break;
-        for (int col=0; col<std::max(1,static_cast<int>(w/4)); ++col) {
-            if (((col*7 + row*13 + seed) % 5) == 0) continue;
-            float xx = x - w*0.5f + 2.0f + col*4.0f;
-            DrawCube(v3(xx,yy,z-d*0.501f),1.35f,1.35f,0.08f,alpha({105,190,220,255},static_cast<unsigned char>(150+((seed+row+col)%90))));
-        }
-    }
-    DrawCube(v3(x,h+0.5f,z), w*0.82f,0.7f,d*0.82f, {27,31,40,255});
-}
-
-void DrawWorld(float t) {
-    DrawPlane(v3(0,0,0), {WORLD,WORLD}, {24,31,38,255});
-    DrawRoads();
-    for (int bx=-4; bx<=4; ++bx) for (int bz=-4; bz<=4; ++bz) {
-        float x=bx*54, z=bz*54;
-        if (std::abs(bx)<=3 && std::abs(bz)<=3 && (bx==0 || bz==0)) continue;
-        if ((bx+bz)%5==0) {
-            DrawCube(v3(x,0.12f,z), BLOCK-5,0.18f,BLOCK-5,{40,74,53,255});
-            for(int k=0;k<4;k++) DrawCube(v3(x+frand(-18,18),1.0f,z+frand(-18,18)),1.0f,2.0f,1.0f,{34,98,52,255});
-        } else {
-            float h=frand(9,34); float w=frand(25,45), d=frand(25,45);
-            DrawBuilding(x+frand(-5,5),z+frand(-5,5),w,d,h,{static_cast<unsigned char>(42+bx*3+40),static_cast<unsigned char>(48+bz*2+30),static_cast<unsigned char>(60+((bx*bz+8)*3)),255}, bx*31+bz*17);
-        }
-    }
-    // Landmark tower and radio mast
-    DrawCylinder(v3(-108,19,-102), 11, 7, 38, 16, {52,61,75,255});
-    DrawCylinder(v3(-108,40,-102), 0.8f,0.35f,22,8,{170,180,192,255});
-    DrawSphere(v3(-108,52,-102),1.4f,{245,72,72,255});
-    // Street lamps
-    for (int i=-3;i<=3;i++) for(int k=-3;k<=3;k++) {
-        float x=i*54+11,z=k*54+11;
-        DrawCylinder(v3(x,2.8f,z),0.14f,0.14f,5.5f,8,{50,54,61,255});
-        DrawSphere(v3(x,5.7f,z),0.38f,{255,210,130,255});
-    }
-    // distant skyline glow
-    for(int i=0;i<14;i++) {
-        float x=-175+i*27;
-        float h=frand(18,52);
-        DrawCube(v3(x,h*0.5f,-178),20,h,10,{30,38,53,255});
-        DrawCube(v3(x,h*0.72f,-183),14,1,0.12f,{90,150,190,110});
-    }
-    (void)t;
-}
-
-void DrawVehicle(const Vehicle& c, float time) {
-    Vector3 p=c.p;
-    float glow = c.police ? (0.5f+0.5f*std::sin(time*12)) : 0;
-    DrawCube(p+v3(0,0.65f,0),3.9f,1.0f,7.2f,c.body);
-    DrawCube(p+v3(0,1.25f,0.25f),3.0f,0.85f,3.6f,{38,48,60,255});
-    DrawCube(p+v3(0,1.28f,-1.55f),2.65f,0.55f,1.15f,{95,145,165,255});
-    DrawCube(p+v3(0,1.28f,2.05f),2.65f,0.55f,1.15f,{50,70,83,255});
-    for(int s=-1;s<=1;s+=2) for(int z=-1;z<=1;z+=2) {
-        DrawCylinder(p+v3(s*2.0f,0.48f,z*2.3f),0.62f,0.62f,0.35f,12,{18,20,24,255});
-        DrawCylinder(p+v3(s*2.0f,0.48f,z*2.3f),0.28f,0.28f,0.37f,12,{80,84,90,255});
-    }
-    DrawCube(p+v3(-1.75f,1.0f,-3.45f),0.7f,0.32f,0.1f,{255,220,150,255});
-    DrawCube(p+v3(1.75f,1.0f,-3.45f),0.7f,0.32f,0.1f,{255,220,150,255});
-    if(c.police){ DrawCube(p+v3(0,1.8f,0),1.2f,0.28f,0.55f,{220,220,225,255}); DrawCube(p+v3(-0.38f,1.98f,0),0.28f,0.12f,0.55f,alpha({235,50,65,255},static_cast<unsigned char>(100+glow*155))); DrawCube(p+v3(0.38f,1.98f,0),0.28f,0.12f,0.55f,alpha({55,105,245,255},static_cast<unsigned char>(100+(1-glow)*155))); }
-}
-
-void DrawPed(const Ped& p) {
-    if(!p.alive) return;
-    Color shirt=p.hostile?Color{205,65,62,255}:Color{65,105,150,255};
-    DrawCylinder(p.p+v3(0,1.0f,0),0.36f,0.48f,1.4f,8,shirt);
-    DrawSphere(p.p+v3(0,1.95f,0),0.33f,{190,145,112,255});
-    DrawCube(p.p+v3(-0.18f,0.35f,0),0.15f,0.7f,0.15f,{34,38,45,255});
-    DrawCube(p.p+v3(0.18f,0.35f,0),0.15f,0.7f,0.15f,{34,38,45,255});
-}
-
-Vector3 Forward(float yaw, float pitch=0) {
-    return Vector3Normalize(v3(std::sin(yaw)*std::cos(pitch), -std::sin(pitch), std::cos(yaw)*std::cos(pitch)));
-}
-
-void CameraUpdate(Game& g, Camera3D& cam) {
-    Vector3 target = g.inCar && g.car ? g.car->p+v3(0,1.2f,0) : g.player+v3(0,1.5f,0);
-    Vector3 f=Forward(g.playerYaw,g.playerPitch*0.55f);
-    float distance=g.inCar?12.0f:8.2f;
-    cam.target=target;
-    cam.position=target-f*distance+v3(0,2.2f,0);
-    cam.up={0,1,0}; cam.fovy=63; cam.projection=CAMERA_PERSPECTIVE;
-}
-
-void UpdateTraffic(Game& g,float dt) {
-    for(auto& c:g.cars){
-        if(c.occupied) continue;
-        Vector3 dir=v3(std::sin(c.yaw),0,std::cos(c.yaw));
-        c.p += dir*c.speed*dt;
-        if(c.p.x>180)c.p.x=-180; if(c.p.x<-180)c.p.x=180;
-        if(c.p.z>180)c.p.z=-180; if(c.p.z<-180)c.p.z=180;
-        for(const auto& o:g.cars) if(&o!=&c && Vector3Distance(c.p,o.p)<6){ c.speed=std::max(4.0f,c.speed-8*dt); }
-        c.speed=clampf(c.speed+(frand(-1,1))*dt,5,14);
-    }
-}
-
-void UpdatePeds(Game& g,float dt){
-    for(auto& p:g.peds){
-        if(!p.alive) continue;
-        Vector3 d=p.target-p.p; d.y=0;
-        if(Vector3Length(d)<2){p.target=v3(frand(-165,165),0,frand(-165,165)); d=p.target-p.p; d.y=0;}
-        if(Vector3Length(d)>0.01f) p.p+=Vector3Normalize(d)*(p.hostile?1.9f:1.25f)*dt;
-        p.p.y=GroundHeight(p.p.x,p.p.z);
-    }
-}
-
-void StartNextMission(Game& g){
-    if(g.missionIndex>=static_cast<int>(g.missions.size())) return;
-    auto& m=g.missions[g.missionIndex]; m.active=true; m.timer=0; g.missionBanner=5;
-}
-
-void Shoot(Game& g, Camera3D& cam){
-    if(g.shootCooldown>0) return;
-    g.shootCooldown=0.16f; g.muzzle=0.08f;
-    Ray ray=GetMouseRay(GetMousePosition(),cam);
-    float best=1000; Ped* hit=nullptr;
-    for(auto& p:g.peds){
-        if(!p.alive) continue;
-        RayCollision h=GetRayCollisionSphere(ray,p.p+v3(0,1,0),0.55f);
-        if(h.hit && h.distance<best){best=h.distance;hit=&p;}
-    }
-    if(hit){hit->hp-=35; if(hit->hp<=0){hit->alive=false;g.cash+=25;} g.wanted=std::min(5,g.wanted+1);}
-}
-
-void EnterExit(Game& g){
-    if(g.inCar){
-        if(!g.car)return;
-        g.player=g.car->p+v3(4,0,0); g.car->occupied=false; g.car=nullptr; g.inCar=false; return;
-    }
-    float best=5; Vehicle* near=nullptr;
-    for(auto& c:g.cars){float d=Vector3Distance(g.player,c.p); if(d<best){best=d;near=&c;}}
-    if(near){g.inCar=true;g.car=near;near->occupied=true;g.player=near->p;}
-}
-
-void Update(Game& g, float dt, Camera3D& cam){
-    g.time+=dt; g.shootCooldown=std::max(0.0f,g.shootCooldown-dt); g.muzzle=std::max(0.0f,g.muzzle-dt); g.damageFlash=std::max(0.0f,g.damageFlash-dt); g.missionBanner=std::max(0.0f,g.missionBanner-dt);
-    if(IsKeyPressed(KEY_ESCAPE)){g.paused=!g.paused; if(g.paused)EnableCursor();else DisableCursor();}
-    if(g.paused)return;
-    Vector2 md=GetMouseDelta();
-    if(!IsCursorHidden()) DisableCursor();
-    g.playerYaw += md.x*0.0028f;
-    g.playerPitch=clampf(g.playerPitch-md.y*0.0022f,-0.7f,0.9f);
-    g.aiming=IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
-    if(IsKeyPressed(KEY_E)) EnterExit(g);
-    if(IsMouseButtonDown(MOUSE_BUTTON_LEFT)) Shoot(g,cam);
-    if(IsKeyPressed(KEY_R)) g.muzzle=0;
-
-    UpdateTraffic(g,dt); UpdatePeds(g,dt);
-    if(g.inCar && g.car){
-        Vehicle& c=*g.car;
-        float throttle=(IsKeyDown(KEY_W)?1:0)-(IsKeyDown(KEY_S)?1:0);
-        float steer=(IsKeyDown(KEY_D)?1:0)-(IsKeyDown(KEY_A)?1:0);
-        float maxSpeed=IsKeyDown(KEY_LEFT_SHIFT)?31:23;
-        c.speed += throttle*26*dt;
-        if(std::abs(throttle)<0.1f)c.speed*=std::pow(0.04f,dt);
-        c.speed=clampf(c.speed,-10,maxSpeed);
-        c.yaw += steer*dt*(1.9f+std::abs(c.speed)*0.04f)*(c.speed>=0?1:-1);
-        c.p += v3(std::sin(c.yaw),0,std::cos(c.yaw))*c.speed*dt;
-        c.p.x=clampf(c.p.x,-176,176); c.p.z=clampf(c.p.z,-176,176); c.p.y=GroundHeight(c.p.x,c.p.z)+1.0f;
-        g.player=c.p;
-        if(IsKeyPressed(KEY_SPACE)) c.speed*=0.88f;
-    } else {
-        Vector3 f=Forward(g.playerYaw,0); Vector3 r=v3(f.z,0,-f.x); Vector3 move{};
-        if(IsKeyDown(KEY_W))move+=f; if(IsKeyDown(KEY_S))move-=f; if(IsKeyDown(KEY_D))move+=r; if(IsKeyDown(KEY_A))move-=r;
-        float sp=IsKeyDown(KEY_LEFT_SHIFT)?11:6.3f;
-        if(Vector3Length(move)>0.01f)g.player+=Vector3Normalize(move)*sp*dt;
-        if(IsKeyPressed(KEY_SPACE) && g.player.y<1.6f) g.player.y=4.4f;
-        g.player.y += (g.player.y>1.0f? -15.0f:0)*dt; if(g.player.y<1.0f)g.player.y=1.0f;
-        g.player.x=clampf(g.player.x,-176,176);g.player.z=clampf(g.player.z,-176,176);
-    }
-    // Collisions and pickups.
-    for(auto& p:g.pickups) if(p.alive && Vector3Distance(g.player,p.p)<2.2f){p.alive=false;g.cash+=p.value;}
-    for(const auto& p:g.peds) if(p.alive && p.hostile && Vector3Distance(g.player,p.p)<4.5f && g.wanted>0){
-        if(frand(0,1)<dt*0.45f){ if(g.armor>0)g.armor-=7;else g.health-=7;g.damageFlash=.15f; }
-    }
-    // Wanted decay only when the player is not causing fresh trouble.
-    if(g.wanted>0 && g.time>8 && std::fmod(g.time,12.0f)<dt) g.wanted--;
-    if(g.health<=0){g.health=100;g.armor=25;g.cash=std::max(0,g.cash-250);g.wanted=0;g.player=v3(0,1,20);g.inCar=false;g.car=nullptr;}
-
-    if(g.missionIndex<static_cast<int>(g.missions.size())){
-        Mission& m=g.missions[g.missionIndex];
-        if(!m.active && !m.complete)StartNextMission(g);
-        if(m.active){
-            m.timer+=dt;
-            if(g.missionIndex==2){
-                if(m.timer>=45){m.complete=true;m.active=false;g.cash+=1500;g.missionIndex++;g.missionBanner=6;}
-            } else if(Vector3Distance(g.player,m.target)<m.radius){
-                m.complete=true;m.active=false;g.cash+=1000;g.wanted=std::max(0,g.wanted-1);g.missionIndex++;g.missionBanner=6;
-            }
-        }
-    }
-}
-
-void DrawUI(const Game& g, int fps){
-    DrawRectangle(0,0,W,64,alpha({8,11,17,255},205));
-    DrawText("GROKTASTIC",28,18,26,{235,239,245,255});
-    DrawText("CITY // AFTER DARK",225,22,16,{110,170,190,255});
-    DrawText(TextFormat("$ %06d",g.cash),W-235,18,24,{115,230,160,255});
-    for(int i=0;i<5;i++) DrawText(i<g.wanted?"★":"☆",W-245+i*28,48,20,i<g.wanted?Color{245,205,70,255}:Color{95,100,110,255});
-    DrawRectangle(28,H-66,260,12,{35,39,45,255});DrawRectangle(28,H-66,260*(g.health/100),12,{220,66,68,255});
-    DrawRectangle(28,H-46,260,9,{35,39,45,255});DrawRectangle(28,H-46,260*clampf(g.armor/100,0,1),9,{80,150,215,255});
-    DrawText("HEALTH",295,H-70,14,{170,178,188,255});DrawText("ARMOR",295,H-50,14,{170,178,188,255});
-    if(g.inCar)DrawText("E  EXIT VEHICLE   |   SPACE  HANDBRAKE",W/2-190,H-52,14,{210,214,220,255});
-    else DrawText("WASD MOVE   SHIFT SPRINT   E ENTER CAR   LMB FIRE",W/2-240,H-52,14,{210,214,220,255});
-    // minimap
-    int mx=W-205,my=H-205;DrawRectangle(mx,my,180,180,{12,17,23,220});
-    for(int i=-3;i<=3;i++){int x=mx+90+i*27;DrawRectangle(x,my,5,180,{40,45,51,255});DrawRectangle(mx,my+90+i*27,180,5,{40,45,51,255});}
-    float px=mx+90+g.player.x/2,py=my+90+g.player.z/2;DrawCircle(static_cast<int>(px),static_cast<int>(py),5,{90,220,150,255});
-    if(g.missionIndex<static_cast<int>(g.missions.size())){auto& m=g.missions[g.missionIndex];float tx=mx+90+m.target.x/2,ty=my+90+m.target.z/2;DrawCircle(static_cast<int>(tx),static_cast<int>(ty),7,{245,175,70,255});}
-    DrawText(TextFormat("%d FPS",fps),W-80,20,12,{120,130,140,255});
-    if(g.missionIndex<static_cast<int>(g.missions.size())){
-        const Mission&m=g.missions[g.missionIndex];
-        DrawRectangle(W/2-270,78,540,72,alpha({10,14,21,255},g.missionBanner>0?235:135));
-        DrawText(m.name.c_str(),W/2-245,90,21,{245,190,80,255});
-        DrawText(m.objective.c_str(),W/2-245,118,15,{215,220,225,255});
-    }
-    if(g.aiming){DrawLine(W/2-9,H/2,W/2+9,H/2,{235,240,245,230});DrawLine(W/2,H/2-9,W/2,H/2+9,{235,240,245,230});}
-    if(g.missionIndex>=static_cast<int>(g.missions.size())) DrawText("CITY MASTERED",W/2-130,92,25,{115,230,160,255});
-    if(g.paused){DrawRectangle(0,0,W,H,alpha({3,5,8,255},185));DrawText("PAUSED",W/2-72,H/2-30,42,{240,242,245,255});DrawText("ESC TO RETURN",W/2-76,H/2+20,15,{160,170,180,255});}
-}
-}
-
-int main(){
-    SetConfigFlags(FLAG_MSAA_4X_HINT|FLAG_VSYNC_HINT|FLAG_WINDOW_RESIZABLE|FLAG_WINDOW_HIGHDPI);
-    InitWindow(W,H,"GROKTASTIC // Open World Sandbox");
-    SetTargetFPS(120);
-    Game g; GenerateWorld(g);
-    Camera3D cam{}; CameraUpdate(g,cam);
-    RenderTexture2D scene=LoadRenderTexture(W,H);
-    Shader post=LoadShader(0,"assets/post.fs");
-    int timeLoc=GetShaderLocation(post,"time");
-    DisableCursor();
-    while(!WindowShouldClose()){
-        float dt=std::min(GetFrameTime(),0.033f);
-        Update(g,dt,cam); CameraUpdate(g,cam);
-        BeginTextureMode(scene);ClearBackground({10,15,24,255});
-        BeginMode3D(cam);
-        float sun=0.25f+0.5f*std::sin(g.time*0.035f);
-        Color sky={static_cast<unsigned char>(14+35*sun),static_cast<unsigned char>(20+45*sun),static_cast<unsigned char>(34+65*sun),255};
-        DrawWorld(g.time);
-        for(const auto& p:g.pickups) if(p.alive){DrawSphere(p.p+v3(0,0.5f,0),0.32f,{90,235,155,255});DrawRing(p.p+v3(0,0.5f,0),0.5f,0.65f,0,360,16,alpha({100,240,170,255},160));}
-        for(const auto& p:g.peds)DrawPed(p);
-        for(const auto& c:g.cars)DrawVehicle(c,g.time);
-        if(!g.inCar){DrawCylinder(g.player+v3(0,1,0),0.42f,0.5f,1.65f,10,{66,130,180,255});DrawSphere(g.player+v3(0,2.05f,0),0.34f,{198,151,118,255});}
-        if(g.missionIndex<static_cast<int>(g.missions.size()) && g.missionIndex!=2){Vector3 t=g.missions[g.missionIndex].target;DrawCylinder(t,1.5f,0.3f,0.3f,24,alpha({245,178,68,255},170));DrawRing(t+v3(0,0.2f,0),2.0f,2.3f,0,360,32,alpha({245,178,68,255},180));}
-        if(g.muzzle>0){Vector3 f=Forward(g.playerYaw,g.playerPitch);Vector3 o=(g.inCar?g.car->p:g.player)+v3(0,1.5f,0)+f*2;DrawSphere(o,0.25f,{255,220,120,255});}
-        DrawGrid(72,5.0f,{120,130,145,18});
-        EndMode3D();EndTextureMode();
-        BeginDrawing();ClearBackground(BLACK);
-        SetShaderValue(post,timeLoc,&g.time,SHADER_UNIFORM_FLOAT);
-        BeginShaderMode(post);DrawTextureRec(scene.texture,{0,0,(float)scene.texture.width,-(float)scene.texture.height},{0,0},WHITE);EndShaderMode();
-        DrawUI(g,GetFPS());
-        if(g.damageFlash>0)DrawRectangle(0,0,W,H,alpha({235,40,40,255},static_cast<unsigned char>(g.damageFlash*1100)));
-        DrawRectangle(0,0,W,8,{8,11,16,230});DrawRectangle(0,H-8,W,8,{8,11,16,230});
-        EndDrawing();
-    }
-    UnloadShader(post);UnloadRenderTexture(scene);CloseWindow();return 0;
-}
+int main(){SetConfigFlags(FLAG_MSAA_4X_HINT|FLAG_VSYNC_HINT|FLAG_WINDOW_RESIZABLE|FLAG_WINDOW_HIGHDPI);InitWindow(SW,SH,"GROKTASTIC // Open World Sandbox");SetTargetFPS(120);Game g;BuildGame(g);Camera3D cam{};Camera(g,cam);RenderTexture2D rt=LoadRenderTexture(SW,SH);Shader post=LoadShader(0,"assets/post.fs");int tl=GetShaderLocation(post,"time");DisableCursor();while(!WindowShouldClose()){float dt=std::min(GetFrameTime(),.033f);Update(g,dt,cam);Camera(g,cam);BeginTextureMode(rt);ClearBackground({10,15,24,255});BeginMode3D(cam);World(g);for(auto&l:g.loot)if(l.x<900){DrawSphere(l+V(0,.4f,0),.3f,{90,235,155,255});DrawCylinder(l+V(0,.1f,0),.55,.55,.08f,20,A({100,240,170,255},140));}for(auto&p:g.peds)PedDraw(p);for(auto&c:g.cars)CarDraw(c,g.time);if(!g.car){DrawCylinder(g.p+V(0,1,0),.42,.5,1.65,10,{66,130,180,255});DrawSphere(g.p+V(0,2.05f,0),.34,{198,151,118,255});}if(g.mi<(int)g.missions.size()&&g.mi!=2){auto t=g.missions[g.mi].target;DrawCylinder(t,.1,1.5,.25f,24,A({245,178,68,255},170));DrawCylinder(t+V(0,.25f,0),1.9,2.2,.05f,32,A({245,178,68,255},90));}EndMode3D();EndTextureMode();BeginDrawing();ClearBackground(BLACK);SetShaderValue(post,tl,&g.time,SHADER_UNIFORM_FLOAT);BeginShaderMode(post);DrawTextureRec(rt.texture,{0,0,(float)rt.texture.width,-(float)rt.texture.height},{0,0},WHITE);EndShaderMode();UI(g);if(g.flash>0)DrawRectangle(0,0,SW,SH,A({255,55,45,255},100));DrawRectangle(0,0,SW,8,{7,10,15,220});DrawRectangle(0,SH-8,SW,8,{7,10,15,220});EndDrawing();}UnloadShader(post);UnloadRenderTexture(rt);CloseWindow();}
