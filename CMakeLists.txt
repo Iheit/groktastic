@@ -7,9 +7,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
-
-# Keep raylib's optional targets disabled so the Windows build only
-# produces the game we need.
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 set(SHARED OFF CACHE BOOL "" FORCE)
@@ -22,17 +19,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(raylib)
 
-add_executable(groktastic src/main.cpp)
+add_executable(groktastic src/hq_entry.cpp)
 target_link_libraries(groktastic PRIVATE raylib)
-
-# raylib defines PI as a macro. The game uses PI as a C++ constant, so
-# give raylib's macro an identifier value and let the source declaration
-# become the actual constant without a macro collision.
 target_compile_definitions(groktastic PRIVATE PI=GROK_PI)
-
-target_compile_definitions(groktastic PRIVATE
-  $<$<CONFIG:Release>:NDEBUG>
-)
+target_compile_definitions(groktastic PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 
 if(MSVC)
   target_compile_options(groktastic PRIVATE /W4 /permissive- /utf-8)
@@ -42,12 +32,10 @@ else()
 endif()
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
-  add_custom_command(
-    TARGET groktastic POST_BUILD
+  add_custom_command(TARGET groktastic POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/assets"
-            "$<TARGET_FILE_DIR:groktastic>/assets"
-  )
+            "$<TARGET_FILE_DIR:groktastic>/assets")
 
   add_custom_target(package_windows
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
@@ -55,14 +43,12 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:groktastic>" "${CMAKE_BINARY_DIR}/package/groktastic.exe"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "${CMAKE_BINARY_DIR}/package/assets"
     DEPENDS groktastic
-    COMMENT "Packaging Groktastic for Windows"
-  )
+    COMMENT "Packaging Groktastic for Windows")
 else()
   add_custom_target(package_windows
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/package"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:groktastic>" "${CMAKE_BINARY_DIR}/package/groktastic.exe"
     DEPENDS groktastic
-    COMMENT "Packaging Groktastic for Windows"
-  )
+    COMMENT "Packaging Groktastic for Windows")
 endif()
