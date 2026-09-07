@@ -1,0 +1,32 @@
+name: Windows Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/Release/groktastic.exe dist/groktastic.exe
+          if (Test-Path assets) { Copy-Item assets dist/assets -Recurse }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: groktastic-windows-x64
+          path: dist/
